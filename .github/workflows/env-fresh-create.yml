@@ -23,6 +23,7 @@ jobs:
   create-environment-resources:
     name: Create Environment Resources
     runs-on: ubuntu-latest
+    environment: solenglatest
     env:
         JF_URL: ${{ inputs.jf_url }}
         JF_ACCESS_TOKEN: ${{ inputs.jf_access_token }}

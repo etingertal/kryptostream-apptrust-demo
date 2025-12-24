@@ -15,6 +15,7 @@ jobs:
   promote-application:
     name: Release Latest Application Version
     runs-on: ubuntu-latest
+    environment: solenglatest
     env:
       JF_URL: ${{ vars.JF_URL }}
       JF_USER: ${{ vars.JF_USER }}
