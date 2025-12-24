@@ -1,0 +1,227 @@
+name: End 2 End Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read           # for detecting the Github Actions environment
+  id-token: write         # for creating OIDC tokens for signing
+  packages: write         # for uploading attestations
+  contents: read          # read the contents permission
+  security-events: write  # for uploading code scanning
+
+jobs:
+  end2end-tests:
+    name: Run E2E Tests with Docker Services
+    runs-on: ubuntu-latest
+    env:
+      JFROG_CLI_KEY_ALIAS: ${{ vars.JFROG_CLI_KEY_ALIAS }}
+      JFROG_CLI_SIGNING_KEY: ${{ secrets.JFROG_CLI_SIGNING_KEY }}
+      DOCKER_REGISTRY: ${{ vars.DOCKER_QA_REGISTRY }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup JFrog CLI
+      uses: jfrog/setup-jfrog-cli@v4
+      with:
+        version: latest
+        oidc-provider-name: btcwallet-gh
+        oidc-audience: btcwallet-gh
+      id: setup-cli
+      env:
+        JF_URL: ${{ vars.JF_URL }}
+        # JF_USER: ${{ vars.JF_USER }}
+        # JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: e2e-tests/package-lock.json
+
+    - name: Login to Docker Registry
+      run: |
+        echo "🔐 Logging into JFrog Artifactory Docker registry..."
+        echo "Registry: ${{ env.DOCKER_REGISTRY }}"
+        echo ${{ steps.setup-cli.outputs.oidc-token }} | docker login -u ${{ steps.setup-cli.outputs.oidc-user }} --password-stdin ${{ env.DOCKER_REGISTRY }}
+        echo "✅ Successfully logged into Docker registry"
+
+    - name: Get latest Docker images from Artifactory for QA environment
+      id: get-images
+      run: |
+        echo "🔍 Fetching latest Docker images from Artifactory..."
+        
+        # Get latest images
+        BTCWALLET_RESPONSE=$(curl -s -X POST \
+          -H "Authorization: Bearer ${{ steps.setup-cli.outputs.oidc-token }}" \
+          -H "Content-Type: text/plain" \
+          -d 'items.find({"repo": "btcwallet-qa-docker-local", "name": "list.manifest.json", "path": {"$match": "btcwallet/*"}}).sort({"$desc": ["created"]}).limit(1)' \
+            "${{ vars.JF_URL }}/artifactory/api/search/aql")
+        echo "BTCWallet API Response: $BTCWALLET_RESPONSE"        
+
+        BTCWALLET_IMAGE_TAG=$(echo "$BTCWALLET_RESPONSE" | jq -r '.results[0].path | split("/") | .[1] // empty')
+        echo "✅ Found btcwallet image tag: $BTCWALLET_IMAGE_TAG"
+
+        UI_RESPONSE=$(curl -s -X POST \
+          -H "Authorization: Bearer ${{ steps.setup-cli.outputs.oidc-token }}" \
+          -H "Content-Type: text/plain" \
+          -d 'items.find({"repo": "btcwallet-qa-docker-local", "name": "list.manifest.json", "path": {"$match": "btcwallet-ui/*"}}).sort({"$desc": ["created"]}).limit(1)' \
+            "${{ vars.JF_URL }}/artifactory/api/search/aql")
+        echo "btcwallet-ui API Response: $UI_RESPONSE"
+
+        UI_IMAGE_TAG=$(echo "$UI_RESPONSE" | jq -r '.results[0].path | split("/") | .[1] // empty')
+        echo "✅ Found btcwallet-ui image tag: $UI_IMAGE_TAG"
+
+        
+        # Set output variables
+        echo "btcwallet_version=$BTCWALLET_IMAGE_TAG" >> $GITHUB_OUTPUT
+        echo "ui_version=$UI_IMAGE_TAG" >> $GITHUB_OUTPUT
+        
+        echo "📋 Image Summary:"
+        echo "- BTCWallet: ${{ env.DOCKER_REGISTRY }}/btcwallet:$BTCWALLET_IMAGE_TAG"
+        echo "- BTCWallet UI: ${{ env.DOCKER_REGISTRY }}/btcwallet-ui:$UI_IMAGE_TAG"
+
+    - name: Pull Docker images
+      run: |
+        echo "📥 Pulling Docker images..."
+
+        # Pull btcwallet image
+        echo "📦 Pulling btcwallet image..."
+        docker pull ${{ env.DOCKER_REGISTRY }}/btcwallet:${{ steps.get-images.outputs.btcwallet_version }}
+
+        # Pull btcwallet-ui image
+        echo "📦 Pulling btcwallet-ui image..."
+        docker pull ${{ env.DOCKER_REGISTRY }}/btcwallet-ui:${{ steps.get-images.outputs.ui_version }}
+        
+        echo "✅ All images pulled successfully"
+
+    - name: Start Docker services
+      run: |
+        echo "🚀 Starting Docker services..."
+
+        # Start btcwallet service
+        echo "🔧 Starting btcwallet service..."
+        docker run -d --name btcwallet-service \
+          -p 8001:8001 \
+          ${{ env.DOCKER_REGISTRY }}/btcwallet:${{ steps.get-images.outputs.btcwallet_version }}
+
+        # Start btcwallet-ui service
+        echo "🔧 Starting btcwallet-ui service..."
+        docker run -d --name btcwallet-ui-service \
+          -p 8081:80 \
+          --add-host host.docker.internal:host-gateway \
+          ${{ env.DOCKER_REGISTRY }}/btcwallet-ui:${{ steps.get-images.outputs.ui_version }}
+
+        # Wait for services to be ready
+        echo "⏳ Waiting for services to be ready..."
+        sleep 10
+        
+        # Check if services are running
+        if ! docker ps | grep -q btcwallet-service; then
+          echo "❌ BTCWallet service failed to start"
+          docker logs btcwallet-service
+          exit 1
+        fi
+
+        if ! docker ps | grep -q btcwallet-ui-service; then
+          echo "❌ BTCWallet UI service failed to start"
+          docker logs btcwallet-ui-service
+          exit 1
+        fi
+        
+        echo "✅ All services started successfully"
+
+    - name: Install E2E test dependencies
+      run: |
+        echo "📦 Installing E2E test dependencies..."
+        cd e2e-tests
+        npm ci
+        echo "✅ Dependencies installed"
+
+    - name: Run E2E tests with report generation
+      run: |
+        echo "🧪 Running E2E tests with report generation..."
+        cd e2e-tests
+        
+        # Run tests and generate reports
+        npm run test:report
+        
+        echo "✅ Tests completed and reports generated"
+
+    - name: Verify test results
+      run: |
+        echo "🔍 Verifying test results..."
+        cd e2e-tests
+        
+        # Check if reports were generated
+        if [ ! -f "test-report.md" ]; then
+          echo "❌ Markdown report not found"
+          exit 1
+        fi
+        
+        if [ ! -f "test-report.json" ]; then
+          echo "❌ JSON report not found"
+          exit 1
+        fi
+        
+        # Check test results from JSON
+        TOTAL_TESTS=$(jq -r '.summary.totalTests' test-report.json)
+        PASSING_TESTS=$(jq -r '.summary.passing' test-report.json)
+        FAILING_TESTS=$(jq -r '.summary.failing' test-report.json)
+        
+        echo "📊 Test Results:"
+        echo "- Total Tests: $TOTAL_TESTS"
+        echo "- Passing: $PASSING_TESTS"
+        echo "- Failing: $FAILING_TESTS"
+        
+        if [ "$FAILING_TESTS" -gt 0 ]; then
+          echo "❌ Some tests failed"
+          exit 1
+        fi
+        
+        echo "✅ All tests passed successfully"
+
+    - name: Create evidence from test results
+      run: |
+        echo "📋 Creating evidence from test results..."
+        cd e2e-tests
+        jf evd create \
+          --subject-repo-path btcwallet-release-bundles-v2/btcwalletapp/3/release-bundle.json.evd \
+          --project btcwallet --predicate-type https://cypress.io/evidence/e2e/v1 --predicate test-report.json --markdown test-report.md \
+          --provider-id cypress 
+                 
+        echo "✅ Evidence created successfully"
+
+
+    - name: Display test summary
+      run: |
+        echo "📋 Test Summary:"
+        cd e2e-tests
+        
+        if [ -f "test-report.md" ]; then
+          echo "📄 Markdown Report Preview:"
+          cat test-report.md >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ -f "test-report.json" ]; then
+          echo "📊 JSON Report Summary:"
+          cat test-report.json
+        fi
+
+    - name: Cleanup Docker services
+      if: always()
+      run: |
+        echo "🧹 Cleaning up Docker services..."
+        
+        # Stop and remove containers
+        docker stop btcwallet-service btcwallet-ui-service 2>/dev/null || true
+        docker rm btcwallet-service btcwallet-ui-service 2>/dev/null || true
+        
+        # Clean up images
+        docker image prune -f
+        
+        echo "✅ Cleanup completed"
+        

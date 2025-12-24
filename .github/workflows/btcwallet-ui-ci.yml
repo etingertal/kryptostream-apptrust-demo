@@ -1,0 +1,125 @@
+name: BTCWallet UI Service CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'btcwallet-ui/**'
+      - '.github/workflows/btcwallet-ui-ci.yml'
+  workflow_dispatch:
+
+# env:
+  # DOCKER_REGISTRY: ${{ vars.DOCKER_REGISTRY }}
+
+permissions:
+  actions: read           # for detecting the Github Actions environment
+  id-token: write         # for creating OIDC tokens for signing
+  packages: write         # for uploading attestations
+  contents: read          # read the contents permission
+  security-events: write  # for uploading code scanning
+  attestations: write     # Required for attestation
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy UI
+    runs-on: ubuntu-latest
+    env:
+      JFROG_CLI_KEY_ALIAS: ${{ vars.JFROG_CLI_KEY_ALIAS }}
+      JFROG_CLI_SIGNING_KEY: ${{ secrets.JFROG_CLI_SIGNING_KEY }}
+      PROJECT_DOCKER_DEV_REPO: ${{ vars.PROJECT_DOCKER_DEV_REPO }}
+      SOURCE_BUILD_NAME: "btcwallet-ui"
+      JF_PROJECT: ${{ vars.JF_PROJECT }}
+      DOCKER_REGISTRY_PREFIX: ${{ vars.DOCKER_REGISTRY_PREFIX }}
+    outputs:
+      build_name: ${{ steps.publish_build.outputs.build_name }}
+      build_number: ${{ steps.publish_build.outputs.build_number }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup JFrog CLI
+      uses: jfrog/setup-jfrog-cli@v4
+      with:
+        version: 2.78.9
+        oidc-provider-name: btcwallet-gh
+        oidc-audience: btcwallet-gh
+      id: setup-cli
+      env:
+        JF_URL: ${{ vars.JF_URL }}
+        # JF_USER: ${{ vars.JF_USER }}
+        # JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
+        JF_PROJECT: ${{ env.JF_PROJECT }}
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Login to Docker Registry
+      run: |
+        echo "🔐 Logging into JFrog Artifactory Docker registry..."
+        echo "Registry: ${{ env.DOCKER_REGISTRY_PREFIX }}/${{ env.PROJECT_DOCKER_DEV_REPO }}"
+        echo ${{ steps.setup-cli.outputs.oidc-token }} | docker login -u ${{ steps.setup-cli.outputs.oidc-user }} --password-stdin ${{ env.DOCKER_REGISTRY_PREFIX }}/${{ env.PROJECT_DOCKER_DEV_REPO }}
+        echo "✅ Successfully logged into Docker registry"
+      
+    - name: Build and Push Docker image
+      id: build-and-push
+      run: |
+        cd ${{ env.SOURCE_BUILD_NAME }}
+        # Build and push to JFrog Artifactory
+        jf docker buildx build --platform linux/amd64,linux/arm64 \
+          --tag ${{ env.DOCKER_REGISTRY_PREFIX }}/${{ env.PROJECT_DOCKER_DEV_REPO }}/${{ env.SOURCE_BUILD_NAME }}:${{ github.run_number }} \
+          --metadata-file=build-metadata --output=type=image --push .
+        jf rt build-docker-create ${{ env.PROJECT_DOCKER_DEV_REPO }}  \
+          --project ${{ env.JF_PROJECT }} --image-file build-metadata --build-name ${{ env.SOURCE_BUILD_NAME }} --build-number ${{ github.run_number }}
+        # Extract the image digest
+        DIGEST=$(jq -r '.["containerimage.digest"]' build-metadata)
+        echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+        echo "Extracted digest: $DIGEST"
+
+    - name: Attest Docker Image with Build Provenance
+      uses: actions/attest-build-provenance@v3
+      with:
+        # The 'oci://' prefix is required by JFrog to correctly parse the artifact type
+        subject-name: oci://${{ env.DOCKER_REGISTRY_PREFIX }}/${{ env.PROJECT_DOCKER_DEV_REPO }}/${{ env.SOURCE_BUILD_NAME }}:${{ github.run_number }}
+        subject-digest: ${{ steps.build-and-push.outputs.digest }}
+
+    - name: Test Docker image
+      run: |
+        cd ${{ env.SOURCE_BUILD_NAME }}
+        # Pull the image for testing
+        jf docker pull ${{ env.DOCKER_REGISTRY_PREFIX }}/${{ env.PROJECT_DOCKER_DEV_REPO }}/${{ env.SOURCE_BUILD_NAME }}:${{ github.run_number }}
+
+        # Run container with better debugging
+        jf docker run -d --name test-ui-container -p 8080:80 ${{ env.DOCKER_REGISTRY_PREFIX }}/${{ env.PROJECT_DOCKER_DEV_REPO }}/${{ env.SOURCE_BUILD_NAME }}:${{ github.run_number }}
+
+        # Wait for container to start
+        sleep 5
+        
+        # Test the web server
+        curl -f http://localhost:8080 || {
+          echo "❌ Web server check failed"
+          exit 1
+        } 
+        
+        # Test that index.html is served
+        curl -f http://localhost:8080/index.html || {
+          echo "❌ Index.html check failed"
+          exit 1
+        }
+
+    - name: Publish buildinfo
+      id: publish_build
+      run: |
+        jf rt build-add-git ${{ env.SOURCE_BUILD_NAME }} ${{ github.run_number }}
+        jf rt build-publish ${{ env.SOURCE_BUILD_NAME }} ${{ github.run_number }}
+        echo "build_name=${{ env.SOURCE_BUILD_NAME }}" >> $GITHUB_OUTPUT
+        echo "build_number=${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+  create_jira_evidence:
+    needs: build-and-deploy
+    uses: ./.github/workflows/create-jira-evidence.yml
+    secrets: inherit
+    with: 
+      build_name: ${{ needs.build-and-deploy.outputs.build_name }}
+      build_number: ${{ needs.build-and-deploy.outputs.build_number }}

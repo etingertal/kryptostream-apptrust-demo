@@ -1,0 +1,11 @@
+version: 1
+type: maven
+resolver:
+    serverId: evidence-demo
+    snapshotRepo: btcwallet-dev-maven-virtual
+    releaseRepo: btcwallet-dev-maven-virtual
+deployer:
+    serverId: evidence-demo
+    snapshotRepo: btcwallet-dev-maven-local
+    releaseRepo: btcwallet-prod-maven-local
+useWrapper: true

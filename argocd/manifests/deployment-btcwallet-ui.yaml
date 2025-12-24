@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btcwallet-ui
+  labels:
+    app: btcwallet-ui
+spec:
+  revisionHistoryLimit: 0
+  replicas: 1
+  selector:
+    matchLabels:
+      app: btcwallet-ui
+  template:
+    metadata:
+      labels:
+        app: btcwallet-ui
+    spec:
+      containers:
+      - name: btcwallet-ui-container
+        image: trainingdayapptrustb.jfrog.io/btcwallet-prod-docker-local/btcwallet-ui:41
+        ports:
+        - containerPort: 80
+      imagePullSecrets:
+        - name: trainingdayapptrustb
