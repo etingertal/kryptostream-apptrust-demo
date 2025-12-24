@@ -18,7 +18,7 @@
     <packaging>jar</packaging>
 
     <name>BTC Wallet Service</name>
-    <description>A simple Spring Boot service that provides BTC wallet functionalities</description>
+    <description>A simple Spring Boot service that provides BTC wallet functionalities </description>
 
     <properties>
         <java.version>21</java.version>
