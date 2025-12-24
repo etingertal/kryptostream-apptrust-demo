@@ -22,6 +22,7 @@ jobs:
       JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
       APP_ID: ${{ vars.APPLICATION_NAME }}
       PROJECT_DOCKER_PROD_REPO: ${{ vars.PROJECT_DOCKER_PROD_REPO }}
+      DOCKER_REGISTRY_PREFIX: ${{ vars.DOCKER_REGISTRY_PREFIX }}
       JF_PROJECT: ${{ vars.JF_PROJECT }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -105,7 +106,8 @@ jobs:
               return 0
             fi
             echo "Replacing version in file $DEPLOYMENT_FILE to $BUILD_VER"
-            sed -i "s|${{ env.PROJECT_DOCKER_PROD_REPO }}/${BUILD_NAME}:[0-9]*|${{ env.PROJECT_DOCKER_PROD_REPO }}/${BUILD_NAME}:${BUILD_VER}|g" "$DEPLOYMENT_FILE"
+            # sed -i "s|${{ env.PROJECT_DOCKER_PROD_REPO }}/${BUILD_NAME}:[0-9]*|${{ env.PROJECT_DOCKER_PROD_REPO }}/${BUILD_NAME}:${BUILD_VER}|g" "$DEPLOYMENT_FILE"
+            sed -i "s|\(.*\)${{ env.PROJECT_DOCKER_PROD_REPO }}/${BUILD_NAME}:[0-9]*.*|\1${{ env.DOCKER_REGISTRY_PREFIX }}/${{ env.PROJECT_DOCKER_PROD_REPO }}/${BUILD_NAME}:${BUILD_VER}|g" "$DEPLOYMENT_FILE"
           }
 
           echo "Received result:"
