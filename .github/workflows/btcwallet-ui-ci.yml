@@ -24,7 +24,7 @@ jobs:
   build-and-deploy:
     name: Build and Deploy UI
     runs-on: ubuntu-latest
-    environment: solenglatest
+    environment: ${{ vars.JF_GH_CURRENT_ENV }}
     env:
       JFROG_CLI_KEY_ALIAS: ${{ vars.JFROG_CLI_KEY_ALIAS }}
       JFROG_CLI_SIGNING_KEY: ${{ secrets.JFROG_CLI_SIGNING_KEY }}

@@ -15,7 +15,7 @@ jobs:
   create-application-version:
     name: Create Application Version
     runs-on: ubuntu-latest
-    environment: solenglatest
+    environment: ${{ vars.JF_GH_CURRENT_ENV }}
     env:
       JF_URL: ${{ vars.JF_URL }}
       # JF_USER: ${{ vars.JF_USER }}
