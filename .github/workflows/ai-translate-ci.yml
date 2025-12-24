@@ -55,9 +55,9 @@ jobs:
       run: |
         cd translate
         # Install only production dependencies for testing
-        pip install -r requirements-optimized.txt
+        pip install --no-cache-dir -r requirements-optimized.txt
         # Install minimal test dependencies
-        pip install pytest pytest-asyncio
+        pip install --no-cache-dir pytest pytest-asyncio
         python -m pytest tests/ -v --tb=short
         
     - name: Cleanup pip cache
@@ -67,6 +67,7 @@ jobs:
   build:
     name: Build Docker Image
     runs-on: ubuntu-latest
+    environment: solenglatest
     env:
       JFROG_CLI_KEY_ALIAS: ${{ vars.JFROG_CLI_KEY_ALIAS }}
       JFROG_CLI_SIGNING_KEY: ${{ secrets.JFROG_CLI_SIGNING_KEY }}
